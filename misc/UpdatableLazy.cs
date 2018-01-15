@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -24,7 +25,7 @@ namespace truepele
         }
 
         public UpdatableLazy(Func<T> valueFactory, int maxRetries = 3)
-            : this(value  => valueFactory(), maxRetries)
+            : this(value => valueFactory(), maxRetries)
         {
         }
 
@@ -51,7 +52,11 @@ namespace truepele
             }
         }
 
-        public event Action<T> ValueCreated;
+        public event Action<object, T> ValueCreated;
+
+        public event Action<object, Exception> FactoryError;
+
+        public event Action<object, IEnumerable<Exception>> MaxRetriesExceeded;
 
 
         public async Task<T> GetValueAsync()
@@ -119,6 +124,7 @@ namespace truepele
         private void LoadValueWithRetry()
         {
             _updateIsInProgress = true;
+            var exceptions = new List<Exception>();
 
             try
             {
@@ -128,17 +134,18 @@ namespace truepele
                     {
                         _value = _factory(_value);
                     }
-                    catch (Exception)
+                    catch (Exception e)
                     {
-                        // TODO: Error event
+                        exceptions.Add(e);
+                        FactoryError?.Invoke(this, e);
                         continue;
                     }
 
-                    ValueCreated?.Invoke(_value);
+                    ValueCreated?.Invoke(this, _value);
                     return;
                 }
 
-                // TODO: Max attempts reached event
+                MaxRetriesExceeded?.Invoke(this, exceptions);
             }
             finally
             {
