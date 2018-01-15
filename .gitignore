@@ -1,2 +1,7 @@
 .vs/
 misc/obj/
+_ReSharper.Caches/
+misc/bin/
+packages/
+Tests/bin/
+Tests/obj/
