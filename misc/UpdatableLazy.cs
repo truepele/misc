@@ -12,19 +12,19 @@ namespace truepele
     public class UpdatableLazy<T>
     {
         private readonly Func<T, T> _factory;
-        private readonly int _retryCount;
+        private readonly int _maxRetries;
         private readonly SemaphoreSlim _semaphor = new SemaphoreSlim(1, 1);
         private bool _updateIsInProgress;
         private T _value;
 
-        public UpdatableLazy(Func<T, T> valueFactory, int retryCount = 1)
+        public UpdatableLazy(Func<T, T> valueFactory, int maxRetries = 3)
         {
             _factory = valueFactory;
-            _retryCount = retryCount;
+            _maxRetries = maxRetries;
         }
 
-        public UpdatableLazy(Func<T> valueFactory, int retryCount = 1)
-            : this(value  => valueFactory(), retryCount)
+        public UpdatableLazy(Func<T> valueFactory, int maxRetries = 3)
+            : this(value  => valueFactory(), maxRetries)
         {
         }
 
@@ -122,7 +122,7 @@ namespace truepele
 
             try
             {
-                for (var i = 0; i < _retryCount; i++)
+                for (var i = 0; i <= _maxRetries; i++)
                 {
                     try
                     {
