@@ -9,6 +9,7 @@ namespace truepele
     // - Extract factory retrier ?
     // - implement IDisposable
     // - extract semaphore Wait/Release logic
+    // - Fluent interface
 
     public class UpdatableLazy<T>
     {
@@ -141,6 +142,7 @@ namespace truepele
                         continue;
                     }
 
+                    // TODO: Check for null before running a task
                     Task.Run(() => ValueCreated?.Invoke(this, _value));
                     return;
                 }
