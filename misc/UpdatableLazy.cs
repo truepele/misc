@@ -10,6 +10,7 @@ namespace truepele
     // - implement IDisposable
     // - extract semaphore Wait/Release logic
     // - Fluent interface
+    // - Concurent Value Container for _updateIsInProgress
 
     public class UpdatableLazy<T>
     {
