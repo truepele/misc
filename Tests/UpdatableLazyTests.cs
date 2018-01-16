@@ -11,8 +11,8 @@ namespace Tests
     [TestFixture]
     public class UpdatableLazyTests
     {
-        const string TestValue = "Val";
-        const int DefaultMaxRetries = 3;
+        private const string TestValue = "Val";
+        private const int DefaultMaxRetries = 3;
         private const int HandlerDelay = 100;
         private const int WaitHandleDelay = 500;
 
@@ -51,7 +51,7 @@ namespace Tests
             Assert.AreEqual(val, lazy.Value);
 
             val = "Changed";
-            await lazy.UpdateOrWaitAsync();
+            lazy.UpdateOrWaitAsync();
             Assert.AreEqual(val, lazy.Value);
         }
 
@@ -257,7 +257,7 @@ namespace Tests
         [Test]
         public async Task ShouldNot_BlockWorkingThreadByMaxRetriesExceededHandlerAsync()
         {
-            var lazy = new UpdatableLazy<string>(() => throw new Exception(), DefaultMaxRetries);
+            var lazy = CreateFaultyLazyInstance();
             lazy.MaxRetriesExceeded += (o, e) => Thread.Sleep(HandlerDelay);
             var elapsed = await MeasureExecutionTime(async () => await lazy.GetValueAsync());
             Assert.Less(elapsed.TotalMilliseconds, HandlerDelay);
@@ -301,7 +301,7 @@ namespace Tests
 
         private static UpdatableLazy<string> CreateFaultyLazyInstance()
         {
-            return new UpdatableLazy<string>(() => throw new Exception(), DefaultMaxRetries);
+            return new UpdatableLazy<string>((Func<string>)(() => throw new Exception()), DefaultMaxRetries);
         }
     }
 }

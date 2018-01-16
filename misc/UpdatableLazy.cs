@@ -13,22 +13,31 @@ namespace truepele
 
     public class UpdatableLazy<T>
     {
-        private readonly Func<T, T> _factory;
+        private readonly Func<T, Task<T>> _factory;
         private readonly int _maxRetries;
         private readonly SemaphoreSlim _semaphor = new SemaphoreSlim(1, 1);
         private bool _updateIsInProgress;
         private T _value;
 
-        public UpdatableLazy(Func<T, T> valueFactory, int maxRetries = 3)
+        public UpdatableLazy(Func<T, Task<T>> valueFactory, int maxRetries = 3)
         {
             _factory = valueFactory;
             _maxRetries = maxRetries;
         }
 
-        public UpdatableLazy(Func<T> valueFactory, int maxRetries = 3)
-            : this(value => valueFactory(), maxRetries)
+
+        public UpdatableLazy(Func<Task<T>> valueFactory, int maxRetries = 3)
+            : this(value => valueFactory(), maxRetries) { }
+
+
+        public UpdatableLazy(Func<T, T> valueFactory, int maxRetries = 3)
+            : this(async v => valueFactory(v), maxRetries)
         {
         }
+
+
+        public UpdatableLazy(Func<T> valueFactory, int maxRetries = 3)
+            : this(value => valueFactory(), maxRetries) {}
 
 
         public T Value
@@ -76,7 +85,7 @@ namespace truepele
                 _semaphor.Release();
             }
 
-            return await UpdateOrWaitAsync();
+            return await UpdateOrWaitAsync().ConfigureAwait(false);
         }
 
 
@@ -89,7 +98,7 @@ namespace truepele
             {
                 if (!wasInprogress)
                 {
-                    await Task.Run(() => LoadValueWithRetry());
+                    await LoadValueWithRetryAsync().ConfigureAwait(false);
                 }
 
                 return _value;
@@ -98,6 +107,11 @@ namespace truepele
             {
                 _semaphor.Release();
             }
+        }
+
+        public void StartUpdateIfNotInProgress()
+        {
+            Task.Run(UpdateOrWaitAsync);
         }
 
 
@@ -110,7 +124,7 @@ namespace truepele
             {
                 if (!wasInprogress)
                 {
-                    LoadValueWithRetry();
+                    LoadValueWithRetryAsync().Wait();
                 }
 
                 return _value;
@@ -122,7 +136,7 @@ namespace truepele
         }
 
 
-        private void LoadValueWithRetry()
+        private async Task LoadValueWithRetryAsync()
         {
             _updateIsInProgress = true;
             var exceptions = new List<Exception>();
@@ -133,7 +147,7 @@ namespace truepele
                 {
                     try
                     {
-                        _value = _factory(_value);
+                        _value = await _factory(_value).ConfigureAwait(false);
                     }
                     catch (Exception e)
                     {
