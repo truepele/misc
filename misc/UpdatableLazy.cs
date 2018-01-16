@@ -137,15 +137,15 @@ namespace truepele
                     catch (Exception e)
                     {
                         exceptions.Add(e);
-                        FactoryError?.Invoke(this, e);
+                        Task.Run(() => FactoryError?.Invoke(this, e));
                         continue;
                     }
 
-                    ValueCreated?.Invoke(this, _value);
+                    Task.Run(() => ValueCreated?.Invoke(this, _value));
                     return;
                 }
 
-                MaxRetriesExceeded?.Invoke(this, exceptions);
+                Task.Run(() => MaxRetriesExceeded?.Invoke(this, exceptions));
             }
             finally
             {
