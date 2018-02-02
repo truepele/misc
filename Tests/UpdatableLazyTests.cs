@@ -1,10 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using truepele;
+using truepele.Common;
 
 namespace Tests
 {
@@ -13,6 +15,7 @@ namespace Tests
     {
         private const string TestValue = "Val";
         private const int DefaultMaxRetries = 3;
+        private const int ShortDelay = 5;
         private const int HandlerDelay = 100;
         private const int WaitHandleDelay = 500;
 
@@ -34,7 +37,7 @@ namespace Tests
         [Test]
         public void Should_UpdateValue()
         {
-            var val = "Val";
+            var val = TestValue;
             var lazy = new UpdatableLazy<string>(() => val);
             Assert.AreEqual(val, lazy.Value);
 
@@ -47,11 +50,15 @@ namespace Tests
         public async Task Should_UpdateValueAsync()
         {
             var val = "Val";
-            var lazy = new UpdatableLazy<string>(() => val);
+            var lazy = new UpdatableLazy<string>(() =>
+            {
+                Task.Delay(ShortDelay).Wait();
+                return val;
+            });
             Assert.AreEqual(val, lazy.Value);
 
             val = "Changed";
-            lazy.UpdateOrWaitAsync();
+            await lazy.UpdateOrWaitAsync();
             Assert.AreEqual(val, lazy.Value);
         }
 
@@ -73,7 +80,7 @@ namespace Tests
         {
             var lazy = new UpdatableLazy<string>(() =>
             {
-                Task.Delay(HandlerDelay).Wait();
+                Task.Delay(ShortDelay).Wait();
                 return TestValue;
             });
 
@@ -86,8 +93,11 @@ namespace Tests
             var counter = 0;
             var lazy = new UpdatableLazy<string>(() =>
             {
-                if (counter++ < 2)
+                if (counter++ < DefaultMaxRetries - 1)
+                {
                     throw new Exception();
+                }
+
                 return TestValue;
             }, DefaultMaxRetries);
 
@@ -101,8 +111,11 @@ namespace Tests
             var counter = 0;
             var lazy = new UpdatableLazy<string>(() =>
             {
-                if (counter++ < 2)
+                if (counter++ < DefaultMaxRetries - 1)
+                {
                     throw new Exception();
+                }
+
                 return TestValue;
             }, DefaultMaxRetries);
 
@@ -117,6 +130,7 @@ namespace Tests
             var re = new AutoResetEvent(false);
             var lazy = CreateLazyInstance();
             lazy.ValueCreated += (o, v) => re.Set();
+
             var tmp = lazy.Value;
             var eventFired = re.WaitOne(WaitHandleDelay);
             Assert.IsTrue(eventFired);
@@ -128,7 +142,12 @@ namespace Tests
             var re = new AutoResetEvent(false);
             string passedToEventValue = null;
             var lazy = CreateLazyInstance();
-            lazy.ValueCreated += (o, v) => passedToEventValue = v;
+            lazy.ValueCreated += (o, v) =>
+            {
+                passedToEventValue = v;
+                re.Set();
+            };
+
             var tmp = lazy.Value;
             re.WaitOne(WaitHandleDelay);
             Assert.AreEqual(TestValue, passedToEventValue);
@@ -140,8 +159,8 @@ namespace Tests
             var counter = 0;
             var lazy = new UpdatableLazy<string>(() =>
             {
-                if (counter++ == 0)
-                    throw new Exception();
+                counter++;
+                throw new Exception();
                 return string.Empty;
             }, 0);
 
@@ -153,26 +172,76 @@ namespace Tests
         public void Should_FireFactoryErrorEvent()
         {
             var eventCount = 0;
-            var resetEvents = InitAutoResetEvents(DefaultMaxRetries+1);
+            var resetEvents = InitWaitHandles(DefaultMaxRetries+1);
             var lazy = CreateFaultyLazyInstance();
             lazy.FactoryError += (o, e) => resetEvents[eventCount++].Set();
+
             var tmp = lazy.Value;
             WaitHandle.WaitAll(resetEvents, WaitHandleDelay);
             Assert.AreEqual(DefaultMaxRetries + 1, eventCount);
         }
 
-        
+
+        [Test]
+        public void Should_CallAllValueCreatedHandlersEvenIfSomeFail()
+        {
+            CheckCallsAllHAndlersEvenIfSomeFail<string, string>(CreateLazyInstance(), (l, handler) => l.ValueCreated += handler);
+        }
+
+
+        [Test]
+        public void Should_CallAllFactoryErrorHandlersEvenIfSomeFail()
+        {
+            CheckCallsAllHAndlersEvenIfSomeFail<string, Exception>(CreateFaultyLazyInstance(), (l, handler) => l.FactoryError += handler);
+        }
+
+
+        [Test]
+        public void Should_CallAllMaxRetriesExceededHandlersEvenIfSomeFail()
+        {
+            CheckCallsAllHAndlersEvenIfSomeFail<string, IEnumerable<Exception>>(CreateFaultyLazyInstance(), (l, handler) => l.MaxRetriesExceeded += handler);
+        }
+
+        private static void CheckCallsAllHAndlersEvenIfSomeFail<T, TEventArgs>(UpdatableLazy<T> lazyInstance, Action<UpdatableLazy<T>, EventHandler<TEventArgs>> addEventAction)
+        {
+            var resetEvents = InitWaitHandles(3);
+            addEventAction(lazyInstance, (o, e) => resetEvents[0].Set());
+            addEventAction(lazyInstance, (o, e) =>
+            {
+                try
+                {
+                    throw new Exception();
+                }
+                finally
+                {
+                    resetEvents[1].Set();
+                }
+            });
+
+            addEventAction(lazyInstance, (o, e) =>
+            {
+                Task.Delay(HandlerDelay);
+                resetEvents[2].Set();
+            });
+
+            Assert.DoesNotThrow(() => { var tmp = lazyInstance.Value; });
+            WaitHandle.WaitAll(resetEvents, WaitHandleDelay);
+            Assert.IsTrue(resetEvents.All(resetEvent => resetEvent.WaitOne(0)));
+        }
+
+
         [Test]
         public void Should_PassExceptionToFactoryErrorEventHandler()
         {
             var exceptions = new List<Exception>();
-            var resetEvents = InitAutoResetEvents(DefaultMaxRetries + 1);
+            var resetEvents = InitWaitHandles(DefaultMaxRetries + 1);
             var lazy = CreateFaultyLazyInstance();
             lazy.FactoryError += (o,e) =>
             {
                 resetEvents[exceptions.Count].Set();
                 exceptions.Add(e);
             };
+
             var tmp = lazy.Value;
             WaitHandle.WaitAll(resetEvents, WaitHandleDelay);
             Assert.AreEqual(DefaultMaxRetries + 1, exceptions.Count);
@@ -184,6 +253,7 @@ namespace Tests
             var re = new AutoResetEvent(false);
             var lazy = CreateFaultyLazyInstance();
             lazy.MaxRetriesExceeded += (o, e) => re.Set();
+
             var tmp = lazy.Value;
             var eventFired = re.WaitOne(WaitHandleDelay);
             Assert.IsTrue(eventFired);
@@ -200,6 +270,7 @@ namespace Tests
                 exceptions.AddRange(e);
                 re.Set();
             };
+
             var tmp = lazy.Value;
             re.WaitOne(WaitHandleDelay);
             Assert.AreEqual(DefaultMaxRetries + 1, exceptions.Count);
@@ -210,6 +281,7 @@ namespace Tests
         {
             var lazy = CreateLazyInstance();
             lazy.ValueCreated += (o, v) => Thread.Sleep(HandlerDelay);
+
             var elapsed = MeasureExecutionTime(() => { var tmp = lazy.Value; });
             Assert.Less(elapsed.TotalMilliseconds, HandlerDelay);
         }
@@ -219,7 +291,8 @@ namespace Tests
         {
             var lazy = CreateLazyInstance();
             lazy.ValueCreated += (o, v) => Thread.Sleep(HandlerDelay);
-            var elapsed = await MeasureExecutionTime(() => lazy.GetValueAsync());
+
+            var elapsed = await MeasureExecutionTimeAsync(() => lazy.GetValueAsync());
             Assert.Less(elapsed.TotalMilliseconds, HandlerDelay);
         }
 
@@ -239,7 +312,7 @@ namespace Tests
         {
             var lazy = CreateFaultyLazyInstance();
             lazy.FactoryError += (o, e) => Thread.Sleep(HandlerDelay);
-            var elapsed = await MeasureExecutionTime(async () => await lazy.GetValueAsync());
+            var elapsed = await MeasureExecutionTimeAsync(async () => await lazy.GetValueAsync());
             Assert.Less(elapsed.TotalMilliseconds, HandlerDelay);
             Assert.Less(elapsed.TotalMilliseconds, HandlerDelay);
         }
@@ -259,7 +332,7 @@ namespace Tests
         {
             var lazy = CreateFaultyLazyInstance();
             lazy.MaxRetriesExceeded += (o, e) => Thread.Sleep(HandlerDelay);
-            var elapsed = await MeasureExecutionTime(async () => await lazy.GetValueAsync());
+            var elapsed = await MeasureExecutionTimeAsync(async () => await lazy.GetValueAsync());
             Assert.Less(elapsed.TotalMilliseconds, HandlerDelay);
         }
 
@@ -274,7 +347,7 @@ namespace Tests
         }
 
 
-        private static async Task<TimeSpan> MeasureExecutionTime<T>(Func<Task<T>> func)
+        private static async Task<TimeSpan> MeasureExecutionTimeAsync<T>(Func<Task<T>> func)
         {
             var sw = new Stopwatch();
             sw.Start();
@@ -283,12 +356,12 @@ namespace Tests
             return sw.Elapsed;
         }
 
-        private static AutoResetEvent[] InitAutoResetEvents(int count)
+        private static ManualResetEvent[] InitWaitHandles(int count)
         {
-            var resetEvents = new AutoResetEvent[count];
+            var resetEvents = new ManualResetEvent[count];
             for (var i = 0; i < resetEvents.Length; i++)
             {
-                resetEvents[i] = new AutoResetEvent(false);
+                resetEvents[i] = new ManualResetEvent(false);
             }
             return resetEvents;
         }

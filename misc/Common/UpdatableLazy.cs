@@ -1,23 +1,16 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Threading;
 using System.Threading.Tasks;
+using truepele.Threading;
 
-namespace truepele
+namespace truepele.Common
 {
-    // TODO: 
-    // - Extract factory retrier ?
-    // - implement IDisposable
-    // - extract semaphore Wait/Release logic
-    // - Fluent interface
-    // - Concurent Value Container for _updateIsInProgress
-
-    public class UpdatableLazy<T>
+    public class UpdatableLazy<T> : IDisposable
     {
         private readonly Func<T, Task<T>> _factory;
         private readonly int _maxRetries;
         private readonly SemaphoreSlim _semaphor = new SemaphoreSlim(1, 1);
-        private bool _updateIsInProgress;
+        private readonly ConcurentValueContainer<bool> _updateIsInProgress = new ConcurentValueContainer<bool>();
         private T _value;
 
         public UpdatableLazy(Func<T, Task<T>> valueFactory, int maxRetries = 3)
@@ -28,7 +21,9 @@ namespace truepele
 
 
         public UpdatableLazy(Func<Task<T>> valueFactory, int maxRetries = 3)
-            : this(value => valueFactory(), maxRetries) { }
+            : this(value => valueFactory(), maxRetries)
+        {
+        }
 
 
         public UpdatableLazy(Func<T, T> valueFactory, int maxRetries = 3)
@@ -38,52 +33,50 @@ namespace truepele
 
 
         public UpdatableLazy(Func<T> valueFactory, int maxRetries = 3)
-            : this(value => valueFactory(), maxRetries) {}
+            : this(value => valueFactory(), maxRetries)
+        {
+        }
+        
+
+        public event EventHandler<T> ValueCreated;
+
+        public event EventHandler<Exception> FactoryError;
+
+        public event EventHandler<IEnumerable<Exception>> MaxRetriesExceeded;
 
 
         public T Value
         {
             get
             {
-                _semaphor.Wait();
-
-                try
+                using (_semaphor.Enter())
                 {
                     if (_value != null)
                     {
                         return _value;
                     }
                 }
-                finally
-                {
-                    _semaphor.Release();
-                }
 
                 return UpdateOrWait();
             }
         }
 
-        public event Action<object, T> ValueCreated;
 
-        public event Action<object, Exception> FactoryError;
-
-        public event Action<object, IEnumerable<Exception>> MaxRetriesExceeded;
+        public void Dispose()
+        {
+            _semaphor.Dispose();
+            _updateIsInProgress.Dispose();
+        }
 
 
         public async Task<T> GetValueAsync()
         {
-            await _semaphor.WaitAsync().ConfigureAwait(false);
-
-            try
+            using (await _semaphor.EnterAsync().ConfigureAwait(false))
             {
                 if (_value != null)
                 {
                     return _value;
                 }
-            }
-            finally
-            {
-                _semaphor.Release();
             }
 
             return await UpdateOrWaitAsync().ConfigureAwait(false);
@@ -92,10 +85,9 @@ namespace truepele
 
         public async Task<T> UpdateOrWaitAsync()
         {
-            var wasInprogress = _updateIsInProgress;
-            await _semaphor.WaitAsync().ConfigureAwait(false);
+            var wasInprogress = _updateIsInProgress.Value;
 
-            try
+            using (await _semaphor.EnterAsync().ConfigureAwait(false))
             {
                 if (!wasInprogress)
                 {
@@ -103,10 +95,6 @@ namespace truepele
                 }
 
                 return _value;
-            }
-            finally
-            {
-                _semaphor.Release();
             }
         }
 
@@ -118,10 +106,9 @@ namespace truepele
 
         public T UpdateOrWait()
         {
-            var wasInprogress = _updateIsInProgress;
-            _semaphor.Wait();
+            var wasInprogress = _updateIsInProgress.Value;
 
-            try
+            using (_semaphor.Enter())
             {
                 if (!wasInprogress)
                 {
@@ -130,16 +117,12 @@ namespace truepele
 
                 return _value;
             }
-            finally
-            {
-                _semaphor.Release();
-            }
         }
 
 
         private async Task LoadValueWithRetryAsync()
         {
-            _updateIsInProgress = true;
+            _updateIsInProgress.Value = true;
             var exceptions = new List<Exception>();
 
             try
@@ -153,20 +136,19 @@ namespace truepele
                     catch (Exception e)
                     {
                         exceptions.Add(e);
-                        Task.Run(() => FactoryError?.Invoke(this, e));
+                        FactoryError?.BeginRaiseEvent(this, e);
                         continue;
                     }
 
-                    // TODO: Check for null before running a task
-                    Task.Run(() => ValueCreated?.Invoke(this, _value));
+                    ValueCreated?.BeginRaiseEvent(this, _value);
                     return;
                 }
 
-                Task.Run(() => MaxRetriesExceeded?.Invoke(this, exceptions));
+                MaxRetriesExceeded?.BeginRaiseEvent(this, exceptions);
             }
             finally
             {
-                _updateIsInProgress = false;
+                _updateIsInProgress.Value = false;
             }
         }
     }
